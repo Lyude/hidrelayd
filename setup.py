@@ -12,7 +12,10 @@ setup(
         #]
     #},
 
-    install_requires=['kmod'],
+    install_requires=[
+        'kmod',
+        'pyudev'
+    ],
 
     author="Lyude Paul",
     author_email="thatslyude@gmail.com",

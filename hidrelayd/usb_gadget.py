@@ -1,13 +1,18 @@
 #!/usr/bin/python3
 
 import os
+import sys
 import errno
-from time import sleep
+import pyudev
+import weakref
+import fcntl
+import functools
 from enum import Enum
 from logging import debug, info, error
+from itertools import count
 
 class ConfigfsDir():
-    def __init__(self, path):
+    def __init__(self, path, is_child=False):
         """
         This is a configfs helper that helps with automatic cleanup of the sysfs
         directories and links that we make by removing them from most recently
@@ -15,42 +20,89 @@ class ConfigfsDir():
         complain)
         """
         self.path = path
-        self._child_dirs = list()
-        self._child_links = list()
+        self.__keep_alive = list()
+        self.__child_dirs = list()
+        self.__child_links = list()
+        self.__extra_cleanup_cbs = list()
         os.mkdir(self.path)
+
+        # Ensures directories always get cleaned up on GC
+        def cleanup_cb(path, child_dirs, child_links, extra_cleanup_cbs):
+            debug("%s: calling extra cleanup callbacks" % path)
+            for cb, args, kw_args in extra_cleanup_cbs:
+                cb(*args, **kw_args)
+
+            debug("%s: removing links" % path)
+            for finalizer in child_links:
+                finalizer()
+
+            debug("%s: removing children" % path)
+            for finalizer in child_dirs:
+                finalizer()
+
+            debug("%s: removing self" % path)
+            os.rmdir(self.path)
+
+        self._cleanup_handler = weakref.finalize(self, cleanup_cb,
+                                                 self.path,
+                                                 self.__child_dirs,
+                                                 self.__child_links,
+                                                 self.__extra_cleanup_cbs)
+
+        # Top-level parents are responsible for invoking their children's
+        # finalizers before destroying theirselves. This ensures we -always-
+        # end up removing directories/links from the bottom up
+        if is_child:
+            self._cleanup_handler.atexit = False
+
+    def _register_cleanup_cb(self, cb, *args, **kwargs):
+        self.__extra_cleanup_cbs.append(tuple([cb, args, kwargs]))
 
     def _set(self, path, value):
         if isinstance(value, str):
-            debug('"%s" -> %s' % (path, value))
+            debug('%s: "%s" -> %s' % (self.path, value, path))
 
         with open(self.path + '/' + path,
                   mode='wb' if isinstance(value, bytes) else 'w') as attr:
             attr.write(value)
 
-    def _mkdir(self, path):
-        new_dir = ConfigfsDir('%s/%s' % (self.path, path))
-        self._child_dirs.append(new_dir)
+    def _get(self, path):
+        with open(self.path + '/' + path) as attr:
+            val = attr.read().strip()
+            debug('%s: "%s" <- %s' % (self.path, val, path))
+            return val
+
+    def _mkdir(self, path, keep_ref=True):
+        """
+        Create a directory inside this object's location.
+
+        Keyword arguments:
+        keep_ref -- Whether the directory stays alive until self is destroyed
+        """
+        debug('%s: mkdir %s' % (self.path, path))
+
+        new_dir = ConfigfsDir('%s/%s' % (self.path, path), True)
+        if keep_ref:
+            self.__keep_alive.append(new_dir)
+
+        self.__child_dirs.append(new_dir._cleanup_handler)
         return new_dir
 
-    def _symlink(self, src, dest):
-        full_dest = '%s/%s' % (self.path, dest)
-        new_link = os.symlink(src, full_dest)
-        self._child_links.append(full_dest)
+    def _link(self, name, dest):
+        """
+        Create a link to another ConfigfsDir object inside this one. If the
+        object is destroyed before self, it's link is automatically removed.
+        """
+        debug('%s: %s -> %s' % (self.path, name, dest.path))
+        os.symlink(dest.path, self.path + '/' + name)
 
-    def _rmlink(self, path):
-        assert os.path.islink(dest)
-        self._child_links.remove(dest)
-        os.remove(dest)
+        def link_cleanup_cb(link_path):
+            os.remove(link_path)
 
-    def __del__(self):
-        debug("Cleaning up %s" % self.path)
-        for link in self._child_links:
-            os.remove(link)
+        self.__child_links.append(weakref.finalize(dest, link_cleanup_cb,
+                                                   self.path + '/' + name))
 
-        del self._child_dirs
-        os.rmdir(self.path)
-
-class HidGadget(ConfigfsDir):
+class UsbGadget(ConfigfsDir):
     """
     A USB HID Gadget, created through the Linux kernel's USB gadget configfs
     interface. A single gadget can serve multiple functions at the same time,
@@ -65,7 +117,6 @@ class HidGadget(ConfigfsDir):
     manufacturer -- A string containing the name of the manufacturer for the
                     gadget
     product -- A string containing the product name for the gadget
-    configfs_mount -- Where the kernel's configfs filesystem is mounted
     """
     class ProtocolVersion(Enum):
         """ A set of enumerators for each USB protocol revision """
@@ -76,67 +127,18 @@ class HidGadget(ConfigfsDir):
     class Exception(Exception):
         pass
 
-    # We may get rid of this
-    class _Function(ConfigfsDir):
-        REPORT_LEN = 8
-        USB_CLASS = 3
-        USB_SUBCLASS = 1
-
-        KEYBOARD_DESCRIPTOR = bytes([
-            0x05, 0x01, 0x09, 0x06, 0xa1, 0x01, 0x05, 0x07, 0x19, 0xe0, 0x29,
-            0xe7, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x08, 0x81, 0x02,
-            0x95, 0x01, 0x75, 0x08, 0x81, 0x03, 0x95, 0x05, 0x75, 0x01, 0x05,
-            0x08, 0x19, 0x01, 0x29, 0x05, 0x91, 0x02, 0x95, 0x01, 0x75, 0x03,
-            0x91, 0x03, 0x95, 0x06, 0x75, 0x08, 0x15, 0x00, 0x25, 0x65, 0x05,
-            0x07, 0x19, 0x00, 0x29, 0x65, 0x81, 0x00, 0xc0
-        ])
-
-        class Protocol(Enum):
-            KEYBOARD = 1
-            MOUSE = 2
-
-        def __init__(self, gadget, id, protocol, report_descriptor):
-            self.gadget = gadget
-            self.name = 'hid.usb%d' % id
-            super().__init__('%s/functions/%s' % (gadget.path, self.name))
-
-            self._set('protocol', str(protocol.value))
-            self._set('report_length', str(self.REPORT_LEN))
-            self._set('report_desc', bytes(report_descriptor))
-            self._set('subclass', str(self.USB_SUBCLASS))
-
-    class _Config(ConfigfsDir):
-        MAX_POWER = 120 # mA
-
-        def __init__(self, gadget, id):
-            self.gadget = gadget
-            self.name = 'c.%d' % id
-            super().__init__('%s/configs/%s' % (gadget.path, self.name))
-
-            self._set('MaxPower', str(self.MAX_POWER))
-            strings = self._mkdir('strings/0x409')
-            strings._set('configuration', 'Configuration %d' % id)
-
-        def add_function(self, function):
-            self._symlink(function.path, function.name)
-
-        def remove_function(self, function):
-            self._rmlink(function.name)
-
     def __init__(self, name,
                  version=ProtocolVersion.USB_1_1,
                  vendor_id=0xa4ac, product_id=0x0525,
                  serial='', manufacturer='Lyude',
                  product='Wolf powered HID gadget'):
-        assert version in HidGadget.ProtocolVersion
+        assert version in UsbGadget.ProtocolVersion
         assert isinstance(serial, str)
         assert isinstance(manufacturer, str)
         assert isinstance(product, str)
 
         self.name = name
         super().__init__('/sys/kernel/config/usb_gadget/' + name)
-
-        self._configs = list()
 
         """ The serial number string for the USB gadget """
         self.serial = serial
@@ -145,7 +147,10 @@ class HidGadget(ConfigfsDir):
         """ The product string for the USB gadget """
         self.product = product
 
-        self.__bound = False
+        self.bound = False
+
+        self._function_id = count(start=1)
+        self._bound_devs = list()
 
         self._set('idVendor', hex(vendor_id))
         self._set('idProduct', hex(product_id))
@@ -156,48 +161,69 @@ class HidGadget(ConfigfsDir):
         strings._set('manufacturer', manufacturer)
         strings._set('product', product)
 
-        self.__kbd_config = HidGadget._Config(self, 1)
-        self.__kbd_function = HidGadget._Function(
-            self, 1, HidGadget._Function.Protocol.KEYBOARD,
-            HidGadget._Function.KEYBOARD_DESCRIPTOR)
-        self.__kbd_config.add_function(self.__kbd_function)
+        # Create the main config to use for USB hid functions
+        gadget_config = self._mkdir('configs/c.1')
+        config_strings = gadget_config._mkdir('strings/0x409')
+        config_strings._set('configuration', 'Configuration 1')
+
+        self._gadget_config = gadget_config
+
+        # Make sure we unbind our UDC device before getting GCd
+        def unbind_cleanup_cb(bound_devs, udc_ctl):
+            for dev in bound_devs:
+                dev.close()
+            bound_devs.clear()
+
+            try:
+                with open(udc_ctl, 'w') as udc_ctl_fd:
+                    udc_ctl_fd.write('\n')
+            except Exception:
+                pass
+
+        self._register_cleanup_cb(unbind_cleanup_cb, self._bound_devs,
+                                  self.path + '/UDC')
+
+    def create_function(self, protocol, report_length, report_descriptor):
+        function_name = 'hid.usb%d' % next(self._function_id)
+
+        function = self._mkdir('functions/%s' % function_name, keep_ref=False)
+        function._set('protocol', str(protocol))
+        function._set('report_length', str(report_length))
+        function._set('report_desc', bytes(report_descriptor))
+        function._set('subclass', '1')
+        self._gadget_config._link(function_name, function)
+
+        return function
+
+    def find_hidg_device(self, function):
+        device_number = os.makedev(*[int(n) for n in
+                                     function._get('dev').split(':')])
+        device = pyudev.Devices.from_device_number(pyudev.Context(), 'char',
+                                                   device_number)
+        char_dev = open(device.device_node, 'wb')
+
+        self._bound_devs.append(char_dev)
+        return char_dev
 
     def bind(self, udc_dev):
-        """
-        Bind the USB Gadget configuration to a UDC device (e.g. an OTG port)
-
-        Keyword arguments:
-        udc_dev -- The UDC device in /sys/class/udc to bind to
-        """
-        assert not self.__bound
-
         info('Binding %s to %s' % (self.name, udc_dev))
         try:
             self._set('UDC', udc_dev)
         except OSError as e:
-            if e.errno == ENODEV:
+            if e.errno == errno.ENODEV:
                 raise UsbGadget.Exception('No HID devices added to gadget')
             else:
                 raise e
-        self.__bound = True
+
+        self.bound = True
 
     def unbind(self):
-        """ Unbind the USB Gadget configuration from a UDC device """
-        assert self.__bound
+        debug('Unbinding %s' % self.name)
+        # Drop any hidg nodes that depended on this binding
+        for dev in self._bound_devs:
+            dev.close()
 
-        info('Unbinding %s' % self.name)
         self._set('UDC', '\n')
-        self.__bound = False
+        self.bound = False
 
-    def __del__(self):
-        try:
-            info('Removing %s' % self.name)
-            if self.__bound:
-                self.unbind()
-
-            del self.__kbd_config
-            del self.__kbd_function
-        except AttributeError:
-            pass
-
-        super().__del__()
+        self._bound_devs.clear()
