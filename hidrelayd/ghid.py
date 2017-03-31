@@ -6,25 +6,28 @@ import weakref
 from enum import Enum
 from struct import Struct
 
+__all__ = ["Keyboard"]
+
 class HidProtocol(Enum):
     KEYBOARD = 1
     MOUSE = 2
 
-class _Device():
-    def _get_char_dev(self):
-        if self.char_dev == None or self.char_dev.closed:
-            self.char_dev = gadget.find_hidg_device(self.function)
-
+class Device():
     def __init__(self, gadget, protocol, report_length, report_descriptor):
         self.gadget = gadget
         self.function = gadget.create_function(protocol, report_length,
                                                report_descriptor)
         self.char_dev = None
 
-    def sync(self):
-        self.char_dev.flush()
+    def _io_func(func):
+        def func_wrapper(self, *args, **kwargs):
+            if self.char_dev == None or self.char_dev.closed:
+                self.char_dev = gadget.find_hidg_device(self.function)
 
-class Keyboard(_Device):
+            return func(self, *args, **kwargs)
+        return func_wrapper
+
+class Keyboard(Device):
     HID_DESCRIPTOR = bytes([
         0x05, 0x01, 0x09, 0x06, 0xa1, 0x01, 0x05, 0x07, 0x19, 0xe0, 0x29, 0xe7,
         0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x08, 0x81, 0x02, 0x95, 0x01,
@@ -44,6 +47,7 @@ class Keyboard(_Device):
         RIGHT_ALT   = 0x40
         RIGHT_META  = 0x80
 
+    MODIFIER_MASK = 0x7F
     packet = Struct('cx6s')
 
     def __init__(self, gadget):
@@ -54,22 +58,12 @@ class Keyboard(_Device):
     def pressed_keys(self):
         return self.__pressed_keys
 
-    def set_pressed(self, keys=set()):
-        self._get_char_dev()
+    @Device._io_func
+    def set_pressed(self, modifier_mask=0, keys=set()):
+        assert not modifier_mask & ~self.MODIFIER_MASK
+        assert len(keys) <= 6
 
-        modifier_mask = 0
-        key_string = bytearray()
-
-        for key in keys:
-            try:
-                modifier_mask |= Keyboard.Modifier(key).value
-                continue
-            except ValueError:
-                pass
-
-            assert len(key_string) < 6
-            key_string.append(key)
-
-        ret = self.char_dev.write(self.packet.pack(bytes([modifier_mask]),
-                                                   bytes(key_string)))
+        self.char_dev.write(self.packet.pack(bytes([modifier_mask]),
+                                             bytes(keys)))
+        self.char_dev.sync()
         self.__pressed_keys = keys
