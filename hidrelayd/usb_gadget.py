@@ -106,7 +106,7 @@ class ConfigfsDir():
         if keep_ref:
             self.__keep_alive.append(new_dir)
 
-        self.__child_dirs.append(new_dir.close)
+        self.__child_dirs.append(new_dir._cleanup_handler)
         return new_dir
 
     def _link(self, name, dest):
