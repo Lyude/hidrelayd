@@ -93,18 +93,10 @@ class ConfigfsDir():
             debug('%s: "%s" <- %s' % (self.path, val, path))
             return val
 
-    def _mkdir(self, path, keep_ref=True):
-        """
-        Create a directory inside this object's location.
-
-        Keyword arguments:
-        keep_ref -- Whether the directory stays alive until self is destroyed
-        """
+    def _mkdir(self, path):
         debug('%s: mkdir %s' % (self.path, path))
 
         new_dir = ConfigfsDir('%s/%s' % (self.path, path), True)
-        if keep_ref:
-            self.__keep_alive.append(new_dir)
 
         self.__child_dirs.append(new_dir._cleanup_handler)
         return new_dir
@@ -207,7 +199,7 @@ class UsbGadget(ConfigfsDir):
     def create_function(self, protocol, report_length, report_descriptor):
         function_name = 'hid.usb%d' % next(self._function_id)
 
-        function = self._mkdir('functions/%s' % function_name, keep_ref=False)
+        function = self._mkdir('functions/%s' % function_name)
         function._set('protocol', str(protocol))
         function._set('report_length', str(report_length))
         function._set('report_desc', bytes(report_descriptor))
