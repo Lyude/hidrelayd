@@ -64,17 +64,27 @@ class ConfigfsDir():
             debug("%s: removing self" % path)
             os.rmdir(self.path)
 
-        self._cleanup_handler = weakref.finalize(self, cleanup_cb,
-                                                 self.path,
-                                                 self.__child_dirs,
-                                                 self.__child_links,
-                                                 self.__extra_cleanup_cbs)
+        """
+        Guarantees that all of the configfs directories created by this object
+        have been removed. A ConfigfsDir object cannot be used after this has
+        been called.
+
+        When deleting a ConfigfsDir object (or objects inheriting this class),
+        this method should ALWAYS be called beforehand to ensure that
+        directories actually get cleaned up, since a ConfigfsDir object might
+        stay alive beyond the current scope even with deletion.
+        """
+        self.close = weakref.finalize(self, cleanup_cb,
+                                      self.path,
+                                      self.__child_dirs,
+                                      self.__child_links,
+                                      self.__extra_cleanup_cbs)
 
         # Top-level parents are responsible for invoking their children's
         # finalizers before destroying theirselves. This ensures we -always-
         # end up removing directories/links from the bottom up
         if is_child:
-            self._cleanup_handler.atexit = False
+            self.close.atexit = False
 
     def _register_cleanup_cb(self, cb, *args, **kwargs):
         self.__extra_cleanup_cbs.append(tuple([cb, args, kwargs]))
