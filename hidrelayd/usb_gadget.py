@@ -108,7 +108,7 @@ class ConfigfsDir():
 
         new_dir = ConfigfsDir('%s/%s' % (self.path, path), True)
 
-        self.__child_dirs.append(new_dir._cleanup_handler)
+        self.__child_dirs.append(new_dir.close)
         return new_dir
 
     def _link(self, name, dest):
