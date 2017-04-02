@@ -44,7 +44,7 @@ class Device():
     def _io_func(func):
         def func_wrapper(self, *args, **kwargs):
             if self.char_dev == None or self.char_dev.closed:
-                self.char_dev = gadget.find_hidg_device(self.function)
+                self.char_dev = self.gadget.find_hidg_device(self.function)
 
             return func(self, *args, **kwargs)
         return func_wrapper
@@ -69,7 +69,7 @@ class Keyboard(Device):
         RIGHT_ALT   = 0x40
         RIGHT_META  = 0x80
 
-    MODIFIER_MASK = 0x7F
+    MODIFIER_MASK = 0xFF
     packet = Struct('cx6s')
 
     def __init__(self, gadget):
@@ -87,5 +87,5 @@ class Keyboard(Device):
 
         self.char_dev.write(self.packet.pack(bytes([modifier_mask]),
                                              bytes(keys)))
-        self.char_dev.sync()
+        self.char_dev.flush()
         self.__pressed_keys = keys
