@@ -75,7 +75,7 @@ class Keyboard(Device):
     def __init__(self, gadget):
         super().__init__(gadget, HidProtocol.KEYBOARD.value, 8,
                          self.HID_DESCRIPTOR)
-        self.__pressed_keys = set()
+        self.__pressed_keys = []
         self.__modifier_mask = 0
 
     @property
@@ -87,12 +87,11 @@ class Keyboard(Device):
         return self.__modifier_mask
 
     @Device._io_func
-    def set_pressed(self, modifier_mask=0, keys=set()):
+    def set_pressed(self, modifier_mask=0, keys=[]):
         assert not modifier_mask & ~self.MODIFIER_MASK
         assert len(keys) <= 6
 
         self.char_dev.write(self.packet.pack(bytes([modifier_mask]),
                                              bytes(keys)))
-        self.char_dev.flush()
         self.__pressed_keys = keys
         self.__modifier_mask = modifier_mask

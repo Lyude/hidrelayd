@@ -221,7 +221,7 @@ class UsbGadget(ConfigfsDir):
                                      function._get('dev').split(':')])
         device = pyudev.Devices.from_device_number(pyudev.Context(), 'char',
                                                    device_number)
-        char_dev = open(device.device_node, 'wb')
+        char_dev = open(device.device_node, 'wb', buffering=0)
 
         self._bound_devs.append(char_dev)
         return char_dev
