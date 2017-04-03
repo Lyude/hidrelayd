@@ -35,10 +35,10 @@ class HidProtocol(Enum):
     MOUSE = 2
 
 class Device():
-    def __init__(self, gadget, protocol, report_length, report_descriptor):
+    def __init__(self, gadget, protocol):
         self.gadget = gadget
-        self.function = gadget.create_function(protocol, report_length,
-                                               report_descriptor)
+        self.function = gadget.create_function(protocol, self.packet.length,
+                                               self.HID_DESCRIPTOR)
         self.char_dev = None
 
     def _io_func(func):
@@ -73,8 +73,7 @@ class Keyboard(Device):
     packet = Struct('cx6s')
 
     def __init__(self, gadget):
-        super().__init__(gadget, HidProtocol.KEYBOARD.value, 8,
-                         self.HID_DESCRIPTOR)
+        super().__init__(gadget, HidProtocol.KEYBOARD.value)
         self.__pressed_keys = []
         self.__modifier_mask = 0
 
