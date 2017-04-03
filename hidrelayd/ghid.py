@@ -37,14 +37,22 @@ class HidProtocol(Enum):
 class Device():
     def __init__(self, gadget, protocol):
         self.gadget = gadget
-        self.function = gadget.create_function(protocol, self.packet.length,
+        self.function = gadget.create_function(protocol, self.packet.size,
                                                self.HID_DESCRIPTOR)
         self.char_dev = None
+
+    class GadgetUnboundError(Exception):
+        def __init__(self):
+            super().__init__("The UsbGadget for this device is not bound to anything")
 
     def _io_func(func):
         def func_wrapper(self, *args, **kwargs):
             if self.char_dev == None or self.char_dev.closed:
-                self.char_dev = self.gadget.find_hidg_device(self.function)
+                try:
+                    self.char_dev = self.gadget.find_hidg_device(
+                        self.function)
+                except pyudev.DeviceNotFoundByNumberError:
+                    raise Device.GadgetUnboundError()
 
             return func(self, *args, **kwargs)
         return func_wrapper
