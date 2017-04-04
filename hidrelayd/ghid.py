@@ -28,7 +28,7 @@ import weakref
 from enum import Enum
 from struct import Struct
 
-__all__ = ["Keyboard"]
+__all__ = ["Keyboard", "Mouse"]
 
 class HidProtocol(Enum):
     KEYBOARD = 1
@@ -102,3 +102,69 @@ class Keyboard(Device):
                                              bytes(keys)))
         self.__pressed_keys = keys
         self.__modifier_mask = modifier_mask
+
+class Mouse(Device):
+    HID_DESCRIPTOR = bytes([
+        0x05, 0x01, # USAGE_PAGE (Generic Desktop)
+        0x09, 0x02, # USAGE (Mouse)
+        0xa1, 0x01, # COLLECTION (Application)
+        0x09, 0x01, #   USAGE (Pointer)
+        0xa1, 0x00, #   COLLECTION (Physical)
+        0x05, 0x09, #     USAGE_PAGE (Button)
+        0x19, 0x01, #     USAGE_MINIMUM (Button 1)
+        0x29, 0x03, #     USAGE_MAXIMUM (Button 3)
+        0x15, 0x00, #     LOGICAL_MINIMUM (0)
+        0x25, 0x01, #     LOGICAL_MAXIMUM (1)
+        0x95, 0x03, #     REPORT_COUNT (3)
+        0x75, 0x01, #     REPORT_SIZE (1)
+        0x81, 0x02, #     INPUT (Data,Var,Abs)
+        0x95, 0x01, #     REPORT_COUNT (1)
+        0x75, 0x05, #     REPORT_SIZE (5)
+        0x81, 0x03, #     INPUT (Cnst,Var,Abs)
+        0x05, 0x01, #     USAGE_PAGE (Generic Desktop)
+        0x09, 0x30, #     USAGE (X)
+        0x09, 0x31, #     USAGE (Y)
+        0x15, 0x81, #     LOGICAL_MINIMUM (-127)
+        0x25, 0x7f, #     LOGICAL_MAXIMUM (127)
+        0x75, 0x08, #     REPORT_SIZE (8)
+        0x95, 0x02, #     REPORT_COUNT (2)
+        0x81, 0x06, #     INPUT (Data,Var,Rel)
+        0xc0,       #   END_COLLECTION
+        0xc0        # END_COLLECTION
+    ])
+
+    """
+    Layout:
+      Button bitmask (1 byte)
+      X-translation (1 byte)
+      Y-translation (1 byte)
+    """
+    packet = Struct('ccc')
+
+    def Button(Enum):
+        LEFT   = (1 << 0)
+        RIGHT  = (1 << 1)
+        MIDDLE = (1 << 2)
+
+    BUTTON_MASK = 0x7
+
+    def __init__(self, gadget):
+        super().__init__(gadget, HidProtocol.MOUSE.value)
+        self.__btn_mask = 0
+
+    @property
+    def btn_mask(self):
+        return self.__btn_mask
+
+    @Device._io_func
+    def set_pressed(self, btn_mask=0):
+        assert not btn_mask & ~self.BUTTON_MASK
+
+        self.char_dev.write(self.packet.pack(bytes([btn_mask]),
+                                             bytes([0]), bytes([0])))
+        self.__btn_mask = btn_mask
+
+    @Device._io_func
+    def move(self, x, y):
+        self.char_dev.write(self.packet.pack(bytes([self.__btn_mask]),
+                                             bytes([x]), bytes([y])))
