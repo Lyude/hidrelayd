@@ -62,7 +62,7 @@ class ConfigfsDir():
                 finalizer()
 
             debug("%s: removing self" % path)
-            os.rmdir(self.path)
+            os.rmdir(path)
 
         self._cleanup_handler = weakref.finalize(self, cleanup_cb,
                                                  self.path,
