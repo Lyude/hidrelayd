@@ -123,6 +123,12 @@ class ConfigfsDir():
         self.__child_links.append(weakref.finalize(dest, link_cleanup_cb,
                                                    self.path + '/' + name))
 
+class UsbProtocolVersion(Enum):
+    """ A set of enumerators for each USB protocol revision """
+    USB_1_0 = 0x0100
+    USB_1_1 = 0x0110
+    USB_2_0 = 0x0200
+
 class UsbGadget(ConfigfsDir):
     """
     A USB HID Gadget, created through the Linux kernel's USB gadget configfs
@@ -139,21 +145,16 @@ class UsbGadget(ConfigfsDir):
                     gadget
     product -- A string containing the product name for the gadget
     """
-    class ProtocolVersion(Enum):
-        """ A set of enumerators for each USB protocol revision """
-        USB_1_0 = 0x0100
-        USB_1_1 = 0x0110
-        USB_2_0 = 0x0200
 
     class Exception(Exception):
         pass
 
     def __init__(self, name,
-                 version=ProtocolVersion.USB_1_1,
+                 version=UsbProtocolVersion.USB_1_1,
                  vendor_id=0xa4ac, product_id=0x0525,
                  serial='', manufacturer='Lyude',
                  product='Wolf powered HID gadget'):
-        assert version in UsbGadget.ProtocolVersion
+        assert isinstance(version, UsbProtocolVersion)
         assert isinstance(serial, str)
         assert isinstance(manufacturer, str)
         assert isinstance(product, str)
