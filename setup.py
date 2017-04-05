@@ -6,11 +6,11 @@ setup(
     name="hidrelayd",
     version=__version__,
     packages=find_packages(),
-    #entry_points={
-        #'console_scripts': [
-            #'hidrelayd = hidrelayd.__main__'
-        #]
-    #},
+    entry_points={
+        'console_scripts': [
+            'hidrelayd = hidrelayd.__main__'
+        ]
+    },
 
     install_requires=[
         'kmod',
